@@ -58,11 +58,8 @@ def n_words(s):
     return len(re.findall(r"[A-Za-z0-9']+", s or ""))
 
 
-def looks_unsignable(text):
-    """Transcript lines that are clearly not signing (URLs, separators, [image])."""
-    t = (text or "").strip()
-    return (t.startswith("[") or t.lower().startswith("http") or t.lower().startswith("image of")
-            or re.fullmatch(r"[—\-– ]+", t) is not None)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from check_annotations import same_person, unsignable as looks_unsignable  # noqa: E402  one shared rule set
 
 
 def read_csv(path):
@@ -143,7 +140,7 @@ def compare_video(vid, a1_path, a2_path, tr_path):
             r.update(d_start=round(y["start"] - x["start"], 3),
                      d_end=round(y["end"] - x["end"], 3),
                      iou=round(iou(x, y), 3),
-                     signer_agree=(x["signer"] == y["signer"]))
+                     signer_agree=(x["signer"] == y["signer"] or same_person(x["signer"], y["signer"])))
             r["big_diff"] = max(abs(r["d_start"]), abs(r["d_end"])) > 2.0 or r["iou"] < 0.5
         for who, ann in (("a1", x), ("a2", y)):
             if ann:
@@ -186,7 +183,7 @@ def plain_report(summs, pooled):
         L.append(f"=== Video {s['video']} ===")
         if s["transcript_lines"] is not None:
             L.append(f"Transcript lines: {s['transcript_lines']} "
-                     f"({s['transcript_unsignable']} are clearly not signing: URLs, separators, [images])")
+                     f"({s['transcript_unsignable']} are clearly not signing: links, images, clips, ads, speaker labels)")
         L.append(f"Lines marked as signing: annotator 1 = {s['a1_signed']}, annotator 2 = {s['a2_signed']}, "
                  f"both = {s['both']}")
         if s["only_a1"]:

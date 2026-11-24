@@ -160,3 +160,40 @@ def test_cli_empty_annotation_file_fails_cleanly(tmp_path):
                           "--out_dir", str(tmp_path / "out")], capture_output=True, text=True)
     assert res.returncode != 0
     assert "no turns" in res.stderr
+
+
+# --- speaker labels, more non-signing lines, loose name match (added 2026-11-24) ----------
+
+def test_speaker_header_and_new_unsignable_lines():
+    assert ca.speaker_header("Callie Frye, Daily Moth Reporter:") == "Callie Frye, Daily Moth Reporter"
+    assert ca.speaker_header("THE DAILY MOTH (ALEX):") == "THE DAILY MOTH (ALEX)"
+    assert ca.speaker_header("Text: Thank you, Fred!") is None        # has content after the colon
+    for t in ["Lorne:", "(PHOTO)", "Video clip from the trailer", "Sponsored video by Convo: www.convorelay.com",
+              "Follow her on Instagram: https://x.y", "Advertisement from Pi00a: spicy"]:
+        assert ca.unsignable(t), t
+    assert not ca.unsignable("I'm curious, how did they pick you?")
+
+
+def test_same_person():
+    assert ca.same_person("Callie", "Callie Frye, Daily Moth Reporter")
+    assert ca.same_person("Alex", "THE DAILY MOTH (ALEX)")
+    assert ca.same_person("Amaree.", "Amaree Mckenstry-Hall")
+    assert not ca.same_person("Renca", "Dana Miles")
+    assert not ca.same_person("DAILY MOTH", "Alex")       # needs the name table, not guessing
+
+
+def test_header_line_names_the_signer(tmp_path):
+    tr = {"turns": [
+        {"speaker": "Renca", "text": "Renca Dunn:"},
+        {"speaker": "Renca", "text": "Welcome to the show"},
+        {"speaker": "Renca", "text": "Dana:"},            # transcript parser kept the old speaker
+        {"speaker": "Renca", "text": "Thanks for having me"},
+    ]}
+    ann = [["s1", "VID", "0.0", "2.0", "Renca", "2", "Welcome to the show"],
+           ["s2", "VID", "2.5", "4.5", "Dana Miles", "4", "Thanks for having me"]]
+    a, t = write_video(tmp_path, ann, tr)
+    rows, summ = ca.check_video("VID", a, t)
+    rows = {r["line"]: r for r in rows}
+    assert rows[2]["flags"] == [] and rows[4]["flags"] == []     # no false "signer differs"
+    assert summ["not_annotated_maybe_signed"] == []              # "Renca Dunn:" / "Dana:" not reported
+    assert summ["transcript_unsignable"] == 2

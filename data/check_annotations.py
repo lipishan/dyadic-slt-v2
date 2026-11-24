@@ -45,11 +45,36 @@ def words(s):
     return len(re.findall(r"[A-Za-z0-9']+", s or ""))
 
 
+HEADER_RE = re.compile(r"^\s*([^:\n]{1,60}):\s*$")   # a line that is only "Name:" (speaker label)
+NOT_SIGNED_STARTS = ("image of", "video clip", "full-screen", "full screen", "full-size",
+                     "sponsored video", "advertisement", "text:", "video description")
+
+
+def speaker_header(text):
+    """'Callie Frye, Daily Moth Reporter:' -> 'Callie Frye, Daily Moth Reporter'; else None."""
+    m = HEADER_RE.match(text or "")
+    return m.group(1).strip() if m and "http" not in m.group(1) else None
+
+
 def unsignable(text):
+    """Transcript lines that are clearly not signing: images, clips, ads, links, speaker labels."""
     t = (text or "").strip()
     tl = t.lower()
-    return (t.startswith("[") or tl.startswith("http") or tl.startswith("image of")
+    return (t.startswith("[") or t.startswith("(") or "http" in tl or "www." in tl
+            or tl.startswith(NOT_SIGNED_STARTS) or speaker_header(t) is not None
             or re.fullmatch(r"[—\-– ]+", t) is not None)
+
+
+def name_tokens(name):
+    return set(re.findall(r"[a-z]+", norm(name))) - {"the", "and", "dr", "daily", "moth", "reporter", "host"}
+
+
+def same_person(a, b):
+    """Loose name match: 'Callie' ~ 'Callie Frye, Daily Moth Reporter' ~ 'THE DAILY MOTH (CALLIE)'."""
+    if not a or not b:
+        return False
+    ta, tb = name_tokens(a), name_tokens(b)
+    return norm(a) == norm(b) or bool(ta and tb and (ta <= tb or tb <= ta))
 
 
 def nullable(s):
@@ -91,6 +116,9 @@ def check_video(vid, ann_path, tr_path):
         pref_sp, clean = split_prefix(text, speakers)
         signer, source = nullable(r[COLS["signer"]]), "annotator"
         tr_sp = t.get("speaker") if t else None
+        head = speaker_header(tr[line - 2].get("text")) if tr and 2 <= line <= len(tr) + 1 else None
+        if head:                                   # "Name:" on the line above names the signer
+            tr_sp = head
         if signer is None:
             if tr_sp:
                 signer, source = tr_sp, "transcript"
@@ -101,7 +129,7 @@ def check_video(vid, ann_path, tr_path):
                 flags.append("no_signer")
             if signer:
                 flags.append(f"signer_filled_from_{source}")
-        elif tr_sp and signer != tr_sp:
+        elif tr_sp and not same_person(signer, tr_sp):
             flags.append("signer_differs_from_transcript")
         dur = end - start
         if dur <= 0:
@@ -150,7 +178,7 @@ def report(rows, summs):
         L.append(f"=== Video {s['video']} ===")
         if s["transcript_lines"] is not None:
             L.append(f"Transcript lines: {s['transcript_lines']} "
-                     f"({s['transcript_unsignable']} clearly not signing: URLs, separators, images)")
+                     f"({s['transcript_unsignable']} clearly not signing: links, images, clips, ads, speaker labels)")
         L.append(f"Annotated signing turns: {s['annotated']}")
         if s["not_annotated_maybe_signed"]:
             L.append("Transcript lines with no annotation (please confirm they are not signed):")
