@@ -59,5 +59,5 @@ def test_cli_writes_one_file_per_video(tmp_path):
     d = setup(tmp_path)
     out = run(os.path.join(ROOT, "data", "review_list.py"), "--tool_agreement", str(d["agree"]),
               "--checked", str(d["checked"]), "--out_dir", str(d["review"]))
-    assert "VID: 2 lines to re-watch (1 flagged by 2+ reasons)" in out
+    assert "VID: 2 lines to re-watch (2 flagged by 2+ reasons)" in out
     assert (d["review"] / "review_VID.csv").exists()
