@@ -113,7 +113,7 @@ def iou(a, b):
 def within_checks(ann):
     """Per-annotator habits: time resolution, gaps, overlaps between turns."""
     rows = sorted(ann.values(), key=lambda r: r["start"])
-    whole = all(abs(r["start"] - round(r["start"])) < 1e-6 and
+    whole = bool(rows) and all(abs(r["start"] - round(r["start"])) < 1e-6 and
                 abs(r["end"] - round(r["end"])) < 1e-6 for r in rows)
     gaps = [b["start"] - a["end"] for a, b in zip(rows, rows[1:])]
     return dict(n=len(rows), whole_seconds_only=whole,
