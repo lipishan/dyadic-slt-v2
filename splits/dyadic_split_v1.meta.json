@@ -1,0 +1,33 @@
+{
+  "version": "make_split v1 (2026-11-25)",
+  "seed": 13,
+  "tries": 5000,
+  "min_test": 10,
+  "host_min": 5,
+  "long_words": 40,
+  "ratios": {
+    "train": 0.7,
+    "valid": 0.1,
+    "test": 0.2
+  },
+  "score": 0.1727,
+  "inputs": {
+    "merged/turns_merged.csv": "c16e88bdf3749785",
+    "signer_names.csv": "bf57e11e41b6d824",
+    "merged/inventory.csv": "23e4af8ae4937aba"
+  },
+  "hosts": [
+    "Alex",
+    "Callie",
+    "Renca"
+  ],
+  "report": [
+    "Conversations: 129; hosts (people in many videos, seen everywhere): Alex, Callie, Renca",
+    "train:  88 conversations, 1977 targets, 2121 units, 1478 turns, 13.31 h, long units 39%, median turns/conv 14.5, sources {'tool_only': 12, 'ann2_only': 49, 'both': 27}",
+    "valid:  13 conversations,  294 targets,  320 units,  187 turns,  1.96 h, long units 35%, median turns/conv 12, sources {'ann2_only': 7, 'both': 4, 'tool_only': 2}",
+    "test :  28 conversations,  601 targets,  636 units,  480 turns,  3.92 h, long units 39%, median turns/conv 14.5, sources {'ann2_only': 15, 'tool_only': 4, 'both': 9}",
+    "Target share: train 68.8%, valid 10.2%, test 20.9%",
+    "Guests shared between sets: train-test 0, train-valid 0, valid-test 0",
+    "Unseen-guest test conversations (guest never in train/valid): 28 of 28"
+  ]
+}

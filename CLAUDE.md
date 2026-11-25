@@ -21,7 +21,7 @@ The full plan is in `docs/PLAN.md`; this file is the short version plus the rule
   Compare monologue (OpenASL, self-history only) with dialogue (self vs partner history).
 
 ## Plan in brief (section numbers match `docs/PLAN.md`)
-- **§0a Annotation checks** ← *current step* (details below).
+- **§0a Annotation checks**: done (see Data status).
 - **§0 Dyadic split:** split by whole conversation (70/10/20 by targets, ≥ 10 test conversations),
   stratified by conversation length, long turns and source; plus a signer-unseen test subset if
   possible. Freeze it as `splits/dyadic_split_v1.csv` **before any training** and never change it.
@@ -43,19 +43,24 @@ The full plan is in `docs/PLAN.md`; this file is the short version plus the rule
   monologue vs dyadic, stream ablation.
 - **§6 Pitfalls:** see the table in the plan; most are enforced by tests in `tests/`.
 
-## Current step: §0a annotation checks
-- **Annotator 2's files are the reference annotation.** Annotator 1 was a tool: it is reported
-  only as an *automatic* annotation (tool quality), never as a second human annotator; its
-  confidence column is ignored.
-- Annotator column names differ and are mapped in code: annotator 1 `turn_id`, annotator 2
-  `turn_index` (joined on transcript line number).
-- `data/check_annotations.py` checks annotator 2 against the transcript: unannotated non-trivial
-  lines, missing signer (filled from the transcript speaker or a `Name (...):` text prefix, which
-  is also stripped), signer/text mismatches, signing speed (0.8–6 words/s), partner overlaps, likely
-  back-channels (short + overlapping). Output `turns_checked.csv` is the input to the split.
-- Old v1 timestamps are a third source, used only for comparison and ablation ABL-DATA1, never as
-  training targets.
-- **Next:** count check on all videos → dyadic split (§0) → person boxes (can run in parallel).
+## Data status (2026-11-25)
+- **Annotation sources:** annotator 2 (a student, not fully trusted) and annotator 1 (an automatic
+  tool, 1 s off on average, never marks overlaps). Neither is the answer key by default.
+- **Merge rules** (`data/merge_annotations.py`): shared videos use annotator 2, but the tool fills
+  lines annotator 2 skipped and replaces annotator-2 turns that fail a check when the tool's passes.
+  Single-source videos use that source. Every unit gets `source` and `confidence`
+  (confirmed / plausible / suspicious). Caption pieces are joined into sentences; `turn_id` groups
+  units into speaking turns (a back-channel keeps the turn it interrupts).
+- **Names:** `data/signer_names.py` -> `signer_names.csv` (person ids; user still checks the
+  "DAILY MOTH" labels, generic roles and multi-person labels; not blocking).
+- **Old v1 timestamps:** "old baseline", only for comparison and ablation ABL-DATA1.
+- **§0 split: DONE and FROZEN** -> `splits/dyadic_split_v1.csv` (+ `.meta.json`): 129 conversations,
+  train 88 / valid 13 / test 28 (68.8 / 10.2 / 20.9% of targets). Hosts Alex, Renca, Callie are
+  in all sets; no guest in two sets; all test conversations are unseen-guest. Never re-split;
+  after name edits use `make_split.py --report_only`.
+- **Open:** whether test targets are confirmed-only (dataset-building filter, split unchanged);
+  "long unit" threshold (placeholder 40 words).
+- **Next:** person boxes + features (SHuBERT per stream, MediaPipe), people index for name checks.
 
 ## Code layout
 - `data/` manifests, split script, causal history builder, count check, long-turn DP, tests
