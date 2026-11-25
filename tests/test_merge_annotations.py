@@ -126,3 +126,78 @@ def test_no_sub_suffix_is_the_same_video(tmp_path):
     assert res.returncode == 0, res.stderr
     inv = list(csv.DictReader(open(d["out"] / "inventory.csv", encoding="utf-8")))
     assert [(r["video"], r["kind"], r["confirmed"]) for r in inv] == [("V", "both", "1")]
+
+
+# --- caption pieces -> sentences, turn ids, '_updated' files (added 2026-11-25) --------------
+
+PIECES_TR = {"turns": [
+    {"speaker": "Ann", "text": "Hi Kyle!"},                          # 1
+    {"speaker": "Kyle", "text": "Hi!"},                              # 2
+    {"speaker": "Kyle", "text": "called The Cane Lane."},            # 3  ends a sentence
+    {"speaker": "Kyle", "text": "I had a hook that I had"},          # 4  piece ...
+    {"speaker": "Kyle", "text": "to use to get across."},            # 5  ... joined with 4
+    {"speaker": "Ann", "text": "That is really impressive to hear"},  # 6  other signer: not joined
+    {"speaker": "Kyle", "text": "Yes"},                              # 7  back-channel inside Ann's turn
+    {"speaker": "Ann", "text": "and good luck"},                     # 8  same signer as 6 -> joined
+]}
+
+
+def run_pieces(tmp_path, tool_rows, name="P_asl_turn_alignment.csv"):
+    d = {n: tmp_path / n for n in ("ann2", "tool", "tr", "out")}
+    for n in ("ann2", "tool", "tr"):
+        d[n].mkdir()
+    (d["tr"] / "P.transcript.json").write_text(json.dumps(PIECES_TR), encoding="utf-8")
+    w(d["tool"] / name, TOOL_HEAD, tool_rows)
+    res = subprocess.run([sys.executable, SCRIPT, "--ann2_dir", str(d["ann2"]), "--tool_dir", str(d["tool"]),
+                          "--transcript_dir", str(d["tr"]), "--out_dir", str(d["out"])],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    return list(csv.DictReader(open(d["out"] / "turns_merged.csv", encoding="utf-8")))
+
+
+PIECES_TOOL = [
+    ["1", "0", "1000", "Ann", "signed", "Hi Kyle!"],
+    ["2", "1500", "2200", "Kyle", "signed", "Hi!"],
+    ["3", "2500", "4000", "Kyle", "signed", "called The Cane Lane."],
+    ["4", "4200", "6000", "Kyle", "signed", "I had a hook that I had"],
+    ["5", "6200", "8000", "Kyle", "signed", "to use to get across."],
+    ["6", "8500", "10500", "Ann", "signed", "That is really impressive to hear"],
+    ["7", "9800", "10300", "Kyle", "signed", "Yes"],
+    ["8", "10200", "11500", "Ann", "signed", "and good luck"],
+]
+
+
+def test_pieces_join_into_sentences(tmp_path):
+    rows = run_pieces(tmp_path, PIECES_TOOL)
+    by = {r["lines"]: r for r in rows}
+    assert "4-5" in by and "4" not in by and "5" not in by
+    assert by["4-5"]["text"] == "I had a hook that I had to use to get across."
+    assert (by["4-5"]["start"], by["4-5"]["end"]) == ("4.2", "8.0")
+    assert by["4-5"]["words"] == "12"
+    assert "3" in by                                     # sentence already finished: not joined
+    assert "2" in by                                     # "Hi!" ends a sentence too
+    assert "6-8" not in by                               # line 7 (other signer) sits between 6 and 8
+
+
+def test_turn_ids_and_backchannel(tmp_path):
+    rows = sorted(run_pieces(tmp_path, PIECES_TOOL), key=lambda r: float(r["start"]))
+    tid = {r["lines"]: int(r["turn_id"]) for r in rows}
+    assert tid["1"] == 1                                 # Ann
+    assert tid["2"] == tid["3"] == tid["4-5"] == 2       # Kyle's turn: three units
+    assert tid["6"] == 3 and tid["8"] == 3               # Ann's turn continues around the back-channel
+    assert tid["7"] == 3                                 # back-channel gets the turn it interrupts
+
+
+def test_updated_tool_file_wins(tmp_path):
+    d = tmp_path / "x"
+    d.mkdir()
+    rows = run_pieces(d, [["1", "0", "1000", "Ann", "signed", "Hi Kyle!"]],
+                      name="P_asl_turn_alignment_updated.csv")
+    assert [r["lines"] for r in rows] == ["1"]
+    tool = d / "tool"
+    w(tool / "P_asl_turn_alignment.csv", TOOL_HEAD, [["1", "0", "1000", "Ann", "", "Hi Kyle!"]])  # old, empty type
+    res = subprocess.run([sys.executable, SCRIPT, "--ann2_dir", str(d / "ann2"), "--tool_dir", str(tool),
+                          "--transcript_dir", str(d / "tr"), "--out_dir", str(d / "out2")],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "no 'signed' rows" not in res.stdout                     # the updated file was used

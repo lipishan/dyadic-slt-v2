@@ -28,11 +28,13 @@ import argparse
 import csv
 import glob
 import os
+import re
 import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from check_annotations import (ANN_PATTERN, TOOL_PATTERN, TR_PATTERN, check_turns,  # noqa: E402
+from check_annotations import (ANN_PATTERN, TOOL_PATTERN, TR_PATTERN, WPS_MAX, WPS_MIN,  # noqa: E402
+                               check_turns,
                                load_transcript, order_and_overlap, read_ann2, same_person, unsignable)
 from compare_annotators import A1_COLS, iou, load_a1  # noqa: E402
 
@@ -52,7 +54,7 @@ def base_id(vid):
             return vid[:-len(suf)]
     return vid
 
-FIELDS = ["video", "line", "start", "end", "duration", "signer", "source", "confidence", "reasons",
+FIELDS = ["video", "line", "lines", "turn_id", "start", "end", "duration", "signer", "source", "confidence", "reasons",
           "words", "wps", "overlaps_partner", "likely_backchannel", "text",
           "a2_start", "a2_end", "a2_signer", "tool_start", "tool_end", "tool_signer", "iou"]
 
@@ -103,7 +105,11 @@ def merge_video(vid, ann2_path, tool_path, tr_path):
         out.append(dict(chosen, source=source, agree=agree, reasons=reasons,
                         a2=a, tool=t, iou=round(iou(a, t), 3) if a and t else ""))
 
+    for x in out:
+        x["line_list"] = [x["line"]]
+    out = join_pieces(out)
     order_and_overlap(out)                      # mixing sources can create new order problems
+    add_turn_ids(out)
     for x in out:
         h = hard(x)
         if h:
@@ -112,14 +118,59 @@ def merge_video(vid, ann2_path, tool_path, tr_path):
         else:
             x["confidence"] = "confirmed" if x["agree"] else "plausible"
 
-    done = {x["line"] for x in out}
+    done = {i for x in out for i in x["line_list"]}
     nobody = [i for i, tt in enumerate(tr or [], 1) if i not in done and not unsignable(tt.get("text"))]
     return out, kind, nobody
 
 
+SENTENCE_END = re.compile(r"[.?!…][\"'”’)\]]*\s*$")
+JOIN_GAP_S = 2.0
+
+
+def join_pieces(units):
+    """Join caption pieces into sentences: the next transcript line by the same signer and the
+    same source, starting within JOIN_GAP_S, is glued on while the text so far has no sentence end.
+    'called The Cane Lane.' stays alone; 'I had a hook that I had' + 'to use to get across.' join."""
+    units = sorted(units, key=lambda x: x["start"])
+    out = []
+    for x in units:
+        p = out[-1] if out else None
+        if (p and x["signer"] == p["signer"] and x["source"] == p["source"]
+                and x["line"] == p["line_list"][-1] + 1
+                and x["start"] - p["end"] <= JOIN_GAP_S
+                and not SENTENCE_END.search(p["text_clean"])):
+            p["end"] = max(p["end"], x["end"])
+            p["duration"] = round(p["end"] - p["start"], 3)
+            p["text_clean"] = (p["text_clean"] + " " + x["text_clean"]).strip()
+            p["words"] += x["words"]
+            p["wps"] = round(p["words"] / p["duration"], 2) if p["duration"] > 0 else float("inf")
+            p["line_list"].append(x["line"])
+            p["agree"] = p["agree"] and x["agree"]
+            p["reasons"] += [r for r in x["reasons"] if r not in p["reasons"]]
+            p["flags"] = sorted((set(p["flags"]) | set(x["flags"])) - {"speed_implausible"})
+            if not (WPS_MIN <= p["wps"] <= WPS_MAX):           # speed judged on the whole sentence
+                p["flags"].append("speed_implausible")
+            p["iou"] = ""                                      # per-piece overlap no longer applies
+        else:
+            out.append(x)
+    return sorted(out, key=lambda x: x["line"])
+
+
+def add_turn_ids(units):
+    """turn_id: number of the speaking turn (a run of one signer). A back-channel does not end
+    the other person's turn; it gets the number of the turn it interrupts."""
+    tid, current = 0, None
+    for x in sorted(units, key=lambda x: x["start"]):
+        if not x["likely_backchannel"] and x["signer"] != current:
+            tid, current = tid + 1, x["signer"]
+        x["turn_id"] = max(tid, 1)
+
+
 def to_row(x):
     a, t = x["a2"] or {}, x["tool"] or {}
-    return dict(video=x["video"], line=x["line"], start=x["start"], end=x["end"],
+    ll = x["line_list"]
+    return dict(video=x["video"], line=x["line"], lines=f"{ll[0]}-{ll[-1]}" if len(ll) > 1 else str(ll[0]),
+                turn_id=x["turn_id"], start=x["start"], end=x["end"],
                 duration=x["duration"], signer=x["signer"], source=x["source"],
                 confidence=x["confidence"], reasons="; ".join(x["reasons"]), words=x["words"],
                 wps=x["wps"], overlaps_partner=x["overlaps_partner"],
@@ -130,17 +181,22 @@ def to_row(x):
 
 
 def video_ids(folder, pattern):
+    """{video id: file}. A newer 'VID..._updated.csv' file wins over 'VID....csv'."""
     if not folder:
         return {}
-    suffix = pattern.format(vid="")
     out = {}
-    for p in sorted(glob.glob(os.path.join(folder, pattern.format(vid="*")))):
-        name = os.path.basename(p)[:-len(suffix)]
-        vid = base_id(name)
-        if vid in out:
-            print(f"warning: two files for video {vid} in {folder}; using {os.path.basename(out[vid])}")
-            continue
-        out[vid] = p
+    for updated in (False, True):               # plain files first, updated ones overwrite them
+        pat = pattern.replace(".csv", "_updated.csv") if updated else pattern
+        suffix = pat.format(vid="")
+        for p in sorted(glob.glob(os.path.join(folder, pat.format(vid="*")))):
+            name = os.path.basename(p)[:-len(suffix)]
+            if not updated and name.endswith("_updated"):
+                continue
+            vid = base_id(name)
+            if vid in out and not updated:
+                print(f"warning: two files for video {vid} in {folder}; using {os.path.basename(out[vid])}")
+                continue
+            out[vid] = p
     return out
 
 

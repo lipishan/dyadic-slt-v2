@@ -242,6 +242,9 @@ def main():
         for p in sorted(glob.glob(os.path.join(a.a2_dir, A2_PATTERN.format(vid="*")))):
             vid = os.path.basename(p)[: -len(A2_PATTERN.format(vid=""))]
             p1 = os.path.join(a.a1_dir, A1_PATTERN.format(vid=vid))
+            upd = p1.replace(".csv", "_updated.csv")
+            if os.path.exists(upd):                     # a newer '_updated' file wins
+                p1 = upd
             if os.path.exists(p1):
                 tr = os.path.join(a.transcript_dir, TR_PATTERN.format(vid=vid)) if a.transcript_dir else None
                 jobs.append((vid, p1, p, tr))
