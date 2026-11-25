@@ -197,3 +197,52 @@ def test_header_line_names_the_signer(tmp_path):
     assert rows[2]["flags"] == [] and rows[4]["flags"] == []     # no false "signer differs"
     assert summ["not_annotated_maybe_signed"] == []              # "Renca Dunn:" / "Dana:" not reported
     assert summ["transcript_unsignable"] == 2
+
+
+# --- annotator 1 (tool) as second opinion (added 2026-11-25) --------------------------------
+
+def write_tool(folder, rows, vid="VID"):
+    path = os.path.join(folder, f"{vid}_asl_turn_alignment.csv")
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["turn_id", "start_ms", "end_ms", "aligned_signer", "annotation_type", "transcript"])
+        w.writerows(rows)
+    return path
+
+
+def test_tool_fills_in_missing_and_overlap(tmp_path):
+    a, t = write_video(tmp_path)          # annotator 2 skipped line 5; line 4 "Yes" overlaps line 3
+    tool = write_tool(tmp_path, [["4", "6000", "7000", "Alex", "signed", "Yes"],
+                                 ["5", "11000", "15000", "Sam", "signed", "I grew up in Ohio and moved later"]])
+    rows, summ = ca.check_video("VID", a, t, tool)
+    assert summ["tool_file"]
+    assert summ["missing_but_in_tool"] == {5: [11.0, 15.0, "Sam"]}
+    assert summ["overlap_tool"][4] == [6.0, 7.0, "Alex"]
+    assert summ["overlap_tool"][3] is None                       # tool has no line 3
+    rows = {r["line"]: r for r in rows}
+    assert rows[4]["tool_start"] == 6.0 and rows[2]["tool_start"] == ""
+    text = ca.report(list(rows.values()), [summ])
+    assert "line 5: I grew up in Ohio and moved later  | tool: 11.0-15.0 s, Sam" in text
+    assert "line 3:  | tool: not found" in text
+
+
+def test_no_tool_file_changes_nothing(tmp_path):
+    a, t = write_video(tmp_path)
+    rows, summ = ca.check_video("VID", a, t, os.path.join(tmp_path, "missing.csv"))
+    assert not summ["tool_file"] and summ["missing_but_in_tool"] == {}
+    assert "tool:" not in ca.report(rows, [summ])
+
+
+def test_cli_with_tool_dir(tmp_path):
+    ann, tr, tool, out = (tmp_path / n for n in ("ann", "tr", "tool", "out"))
+    for d in (ann, tr, tool):
+        d.mkdir()
+    a, t = write_video(ann)
+    os.replace(t, tr / "VID.transcript.json")
+    write_tool(tool, [["5", "11000", "15000", "Sam", "signed", "x"]])
+    res = subprocess.run([sys.executable, SCRIPT, "--ann_dir", str(ann), "--transcript_dir", str(tr),
+                          "--tool_dir", str(tool), "--out_dir", str(out)], capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "| tool: 11.0-15.0 s, Sam" in res.stdout
+    with open(out / "turns_checked.csv", encoding="utf-8") as f:
+        assert "tool_start" in next(csv.reader(f))

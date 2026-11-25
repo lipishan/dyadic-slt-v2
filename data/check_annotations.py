@@ -10,6 +10,11 @@ Single video:
   python check_annotations.py --ann VID_annotations.csv --transcript VID.transcript.json --out_dir checked/
 All videos in folders:
   python check_annotations.py --ann_dir ANN_DIR --transcript_dir TR_DIR --out_dir checked/
+Optional second opinion from annotator 1 (the tool), where a tool file exists:
+  add --tool_dir TOOL_DIR   (files named VID_asl_turn_alignment.csv)
+  Then every line annotator 2 skipped and every overlapping turn also shows the tool's
+  version ("tool: 12.0-15.0 s, Alex" or "tool: not found"). The tool is never used to
+  change annotator 2's file; it only points at what to re-watch.
 
 Outputs in out_dir:
   turns_checked.csv   one row per annotated turn, with cleaned text and flags
@@ -29,6 +34,7 @@ COLS = dict(id="sign_id", video="video_id", start="start_time", end="end_time",
             signer="active_signer", line="turn_index", text="text")
 ANN_PATTERN = "{vid}_annotations.csv"
 TR_PATTERN = "{vid}.transcript.json"
+TOOL_PATTERN = "{vid}_asl_turn_alignment.csv"   # annotator 1 (tool), optional
 NULL = {"", "none", "null", "nan", "unknown"}
 WPS_MIN, WPS_MAX = 0.8, 6.0
 SHORT_S, SHORT_WORDS = 1.5, 3          # "short reply" thresholds for back-channel guess
@@ -94,7 +100,20 @@ def split_prefix(text, known_speakers):
     return None, text
 
 
-def check_video(vid, ann_path, tr_path):
+def load_tool(tool_path):
+    """Annotator 1 (tool) turns by transcript line, or {} if there is no tool file."""
+    if not tool_path or not os.path.exists(tool_path):
+        return {}
+    from compare_annotators import load_a1          # imported here to avoid a circular import
+    return load_a1(tool_path)
+
+
+def tool_info(tool, line):
+    t = tool.get(line)
+    return [t["start"], t["end"], t["signer"]] if t else None
+
+
+def check_video(vid, ann_path, tr_path, tool_path=None):
     with open(ann_path, newline="", encoding="utf-8-sig") as f:
         ann = list(csv.DictReader(f))
     tr = None
@@ -156,6 +175,10 @@ def check_video(vid, ann_path, tr_path):
         if i and x["signer"] == rows[i - 1]["signer"] and x["start"] < rows[i - 1]["end"]:
             x["flags"].append("overlaps_same_signer")
     rows.sort(key=lambda x: x["line"])
+    tool = load_tool(tool_path)
+    for x in rows:                                  # tool's version of every turn, for comparison
+        ti = tool_info(tool, x["line"])
+        x["tool_start"], x["tool_end"], x["tool_signer"] = ti if ti else ("", "", "")
 
     annotated = {x["line"] for x in rows}
     missing = []
@@ -168,8 +191,19 @@ def check_video(vid, ann_path, tr_path):
                 annotated=len(rows), not_annotated_maybe_signed=missing,
                 flagged=sum(1 for x in rows if x["flags"]),
                 overlaps=sum(x["overlaps_partner"] for x in rows),
-                likely_backchannel=[x["line"] for x in rows if x["likely_backchannel"]])
+                likely_backchannel=[x["line"] for x in rows if x["likely_backchannel"]],
+                tool_file=bool(tool),
+                # annotator 2 has no stretch, but the tool found one: strongest "maybe missed" cases
+                missing_but_in_tool={i: tool_info(tool, i) for i, _ in missing if i in tool},
+                overlap_tool={x["line"]: tool_info(tool, x["line"]) for x in rows if x["overlaps_partner"]})
     return rows, summ
+
+
+def tool_note(s, line, table):
+    if not s["tool_file"]:
+        return ""
+    ti = table.get(line)
+    return f"  | tool: {ti[0]:.1f}-{ti[1]:.1f} s, {ti[2]}" if ti else "  | tool: not found"
 
 
 def report(rows, summs):
@@ -183,9 +217,14 @@ def report(rows, summs):
         if s["not_annotated_maybe_signed"]:
             L.append("Transcript lines with no annotation (please confirm they are not signed):")
             for i, t in s["not_annotated_maybe_signed"]:
-                L.append(f"  line {i}: {t}")
+                L.append(f"  line {i}: {t}{tool_note(s, i, s['missing_but_in_tool'])}")
         L.append(f"Turns overlapping the partner: {s['overlaps']}; "
                  f"likely back-channels (short + overlapping): lines {s['likely_backchannel']}")
+        if s["tool_file"] and s["overlap_tool"]:
+            L.append("  Overlapping turns, tool's version (the tool places turns end to end, so it "
+                     "rarely shows overlap itself):")
+            for i, ti in s["overlap_tool"].items():
+                L.append(f"    line {i}:{tool_note(s, i, s['overlap_tool'])}")
         vr = [x for x in rows if x["video"] == s["video"] and x["flags"]]
         if vr:
             L.append(f"Turns with something to check ({len(vr)}):")
@@ -197,7 +236,9 @@ def report(rows, summs):
         L.append("")
     if len(summs) > 1:
         L.append(f"=== All videos: {len(summs)} videos, {len(rows)} turns, "
-                 f"{sum(1 for x in rows if x['flags'])} flagged ===")
+                 f"{sum(1 for x in rows if x['flags'])} flagged; "
+                 f"{sum(len(s['missing_but_in_tool']) for s in summs)} lines the tool found but annotator 2 "
+                 f"did not ({sum(s['tool_file'] for s in summs)} videos have a tool file) ===")
     return "\n".join(L)
 
 
@@ -205,16 +246,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ann"); ap.add_argument("--transcript")
     ap.add_argument("--ann_dir"); ap.add_argument("--transcript_dir")
+    ap.add_argument("--tool"); ap.add_argument("--tool_dir")
     ap.add_argument("--out_dir", default="checked")
     a = ap.parse_args()
     jobs = []
     if a.ann:
-        jobs.append((os.path.basename(a.ann).split("_annotations")[0], a.ann, a.transcript))
+        jobs.append((os.path.basename(a.ann).split("_annotations")[0], a.ann, a.transcript, a.tool))
     elif a.ann_dir:
         for p in sorted(glob.glob(os.path.join(a.ann_dir, ANN_PATTERN.format(vid="*")))):
             vid = os.path.basename(p)[: -len(ANN_PATTERN.format(vid=""))]
             tr = os.path.join(a.transcript_dir, TR_PATTERN.format(vid=vid)) if a.transcript_dir else None
-            jobs.append((vid, p, tr))
+            tool = os.path.join(a.tool_dir, TOOL_PATTERN.format(vid=vid)) if a.tool_dir else None
+            jobs.append((vid, p, tr, tool))
     else:
         sys.exit("give --ann or --ann_dir")
     if not jobs:
