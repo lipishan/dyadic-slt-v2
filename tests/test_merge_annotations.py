@@ -87,9 +87,9 @@ def test_single_source_videos_and_odd_tool_file(tmp_path):
     assert inv["TOOLONLY"]["kind"] == "tool_only"
     assert [r["source"] for r in turns if r["video"] == "TOOLONLY"] == ["tool"]
     assert inv["A2ONLY"]["kind"] == "ann2_only"
-    assert "EMPTYTOOL" not in inv                                   # nothing usable
+    assert inv["EMPTYTOOL"]["kind"] == "no_usable_annotation"        # listed, not silently dropped
     assert "EMPTYTOOL: tool file has no 'signed' rows" in out
-    assert "Videos: 3  (both: 1, annotator 2 only: 1, tool only: 1)" in out
+    assert "Videos: 4  (both: 1, annotator 2 only: 1, tool only: 1, no usable annotation: 1)" in out
 
 
 def test_tool_overlapping_annotator2_turn_is_caught(tmp_path):
@@ -110,3 +110,19 @@ def test_tool_overlapping_annotator2_turn_is_caught(tmp_path):
     assert res.returncode == 0, res.stderr
     t = {int(r["line"]): r for r in csv.DictReader(open(d["out"] / "turns_merged.csv", encoding="utf-8"))}
     assert t[5]["confidence"] == "suspicious" and "overlaps_same_signer" in t[5]["reasons"]
+
+
+def test_no_sub_suffix_is_the_same_video(tmp_path):
+    d = {n: tmp_path / n for n in ("ann2", "tool", "tr", "out")}
+    for n in ("ann2", "tool", "tr"):
+        d[n].mkdir()
+    (d["tr"] / "V.transcript.json").write_text(json.dumps(TR), encoding="utf-8")
+    w(d["ann2"] / "V_annotations.csv", A2_HEAD, [["v1", "V", "0.0", "3.0", "Alex", "2", "Hello there my good friend"]])
+    w(d["tool"] / "V_no_sub_asl_turn_alignment.csv", TOOL_HEAD,
+      [["2", "0", "3000", "Alex", "signed", "Hello there my good friend"]])
+    res = subprocess.run([sys.executable, SCRIPT, "--ann2_dir", str(d["ann2"]), "--tool_dir", str(d["tool"]),
+                          "--transcript_dir", str(d["tr"]), "--out_dir", str(d["out"])],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    inv = list(csv.DictReader(open(d["out"] / "inventory.csv", encoding="utf-8")))
+    assert [(r["video"], r["kind"], r["confirmed"]) for r in inv] == [("V", "both", "1")]

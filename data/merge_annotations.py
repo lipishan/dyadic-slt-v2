@@ -41,6 +41,16 @@ from compare_annotators import A1_COLS, iou, load_a1  # noqa: E402
 HARD_FLAGS = {"speed_implausible", "end_before_start", "no_signer",
               "line_order_differs_from_time_order", "overlaps_same_signer"}
 AGREE_IOU = 0.5
+# Same video saved under a longer name by the tool (e.g. "3viYpepHz9k_no_sub"): map to the real id,
+# otherwise one video is counted twice and could end up in both train and test.
+ID_SUFFIXES = ("_no_sub",)
+
+
+def base_id(vid):
+    for suf in ID_SUFFIXES:
+        if vid.endswith(suf):
+            return vid[:-len(suf)]
+    return vid
 
 FIELDS = ["video", "line", "start", "end", "duration", "signer", "source", "confidence", "reasons",
           "words", "wps", "overlaps_partner", "likely_backchannel", "text",
@@ -123,8 +133,15 @@ def video_ids(folder, pattern):
     if not folder:
         return {}
     suffix = pattern.format(vid="")
-    return {os.path.basename(p)[:-len(suffix)]: p
-            for p in glob.glob(os.path.join(folder, pattern.format(vid="*")))}
+    out = {}
+    for p in sorted(glob.glob(os.path.join(folder, pattern.format(vid="*")))):
+        name = os.path.basename(p)[:-len(suffix)]
+        vid = base_id(name)
+        if vid in out:
+            print(f"warning: two files for video {vid} in {folder}; using {os.path.basename(out[vid])}")
+            continue
+        out[vid] = p
+    return out
 
 
 def main():
@@ -147,9 +164,14 @@ def main():
         tool_path = T.get(vid) if kinds.get("signed") else None
         if vid in T and not tool_path:
             notes.append(f"{vid}: tool file has no 'signed' rows (annotation_type values: {dict(kinds)})")
-        if vid not in A and not tool_path:
+        if vid not in A and not tool_path:              # keep it visible instead of dropping it
+            inv.append(dict(video=vid, kind="no_usable_annotation", has_ann2=False, has_tool=True,
+                            has_transcript=has_tr, turns=0, confirmed=0, plausible=0, suspicious=0,
+                            from_annotator2=0, from_tool=0, signed_lines_nobody_annotated="all"))
             continue
         out, kind, nobody = merge_video(vid, A.get(vid), tool_path, tr if has_tr else None)
+        if not out:
+            notes.append(f"{vid}: tool rows are marked 'signed' but have no start/end times -> 0 turns")
         rows += [to_row(x) for x in out]
         c = Counter(x["confidence"] for x in out)
         s = Counter(x["source"] for x in out)
@@ -172,7 +194,7 @@ def main():
     filled = sum("annotator2 skipped" in r["reasons"] for r in rows)
     nob = sum(len(v["signed_lines_nobody_annotated"].split()) for v in inv)
     L = [f"Videos: {len(inv)}  (both: {k['both']}, annotator 2 only: {k['ann2_only']}, "
-         f"tool only: {k['tool_only']})",
+         f"tool only: {k['tool_only']}, no usable annotation: {k['no_usable_annotation']})",
          f"Turns: {len(rows)}  (from annotator 2: {s['annotator2']}, from tool: {s['tool']})",
          f"  tool used because annotator 2 skipped the line: {filled}",
          f"  tool used because annotator 2's turn failed a check: {switched}",
