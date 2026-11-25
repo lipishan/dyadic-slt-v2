@@ -113,27 +113,30 @@ def tool_info(tool, line):
     return [t["start"], t["end"], t["signer"]] if t else None
 
 
-def check_video(vid, ann_path, tr_path, tool_path=None):
-    with open(ann_path, newline="", encoding="utf-8-sig") as f:
-        ann = list(csv.DictReader(f))
-    tr = None
+ORDER_FLAGS = ("line_order_differs_from_time_order", "overlaps_same_signer")
+
+
+def load_transcript(tr_path):
     if tr_path and os.path.exists(tr_path):
         with open(tr_path, encoding="utf-8") as f:
-            tr = json.load(f)["turns"]
-    speakers = sorted({t.get("speaker") for t in tr or [] if t.get("speaker")} |
-                      {nullable(r[COLS["signer"]]) for r in ann if nullable(r[COLS["signer"]])})
+            return json.load(f)["turns"]
+    return None
 
+
+def check_turns(vid, raw, tr):
+    """Checks for one video's turns from ANY source (annotator 2 or the tool).
+    raw: list of dicts with line, start, end, signer (may be empty), text, sign_id."""
+    speakers = sorted({t.get("speaker") for t in tr or [] if t.get("speaker")} |
+                      {nullable(r["signer"]) for r in raw if nullable(r["signer"])})
     rows = []
-    for r in ann:
-        line = int(float(r[COLS["line"]]))
-        start, end = float(r[COLS["start"]]), float(r[COLS["end"]])
+    for r in raw:
+        line, start, end, text = r["line"], r["start"], r["end"], r["text"]
         t = tr[line - 1] if tr and 1 <= line <= len(tr) else None
-        text = r[COLS["text"]]
         flags = []
         if t and norm(text) != norm(t.get("text")):
             flags.append("text_differs_from_transcript")
         pref_sp, clean = split_prefix(text, speakers)
-        signer, source = nullable(r[COLS["signer"]]), "annotator"
+        signer, source = nullable(r["signer"]), "annotator"
         tr_sp = t.get("speaker") if t else None
         head = speaker_header(tr[line - 2].get("text")) if tr and 2 <= line <= len(tr) + 1 else None
         if head:                                   # "Name:" on the line above names the signer
@@ -157,13 +160,18 @@ def check_video(vid, ann_path, tr_path, tool_path=None):
         wps = w / dur if dur > 0 else float("inf")
         if not (WPS_MIN <= wps <= WPS_MAX):
             flags.append("speed_implausible")
-        rows.append(dict(video=vid, sign_id=r.get(COLS["id"]), line=line, start=start, end=end,
+        rows.append(dict(video=vid, sign_id=r.get("sign_id"), line=line, start=start, end=end,
                          duration=round(dur, 3), signer=signer, signer_source=source,
                          words=w, wps=round(wps, 2), text_clean=clean, flags=flags))
+    order_and_overlap(rows)
+    return rows
 
-    # order, overlaps, back-channel guess
+
+def order_and_overlap(rows):
+    """Order checks, partner overlaps and back-channel guess. Safe to run again after merging."""
     rows.sort(key=lambda x: x["start"])
     for i, x in enumerate(rows):
+        x["flags"] = [f for f in x["flags"] if f not in ORDER_FLAGS]
         x["overlaps_partner"] = False
         for y in rows[max(0, i - 3):i] + rows[i + 1:i + 4]:
             if y["signer"] != x["signer"] and min(x["end"], y["end"]) > max(x["start"], y["start"]):
@@ -175,6 +183,18 @@ def check_video(vid, ann_path, tr_path, tool_path=None):
         if i and x["signer"] == rows[i - 1]["signer"] and x["start"] < rows[i - 1]["end"]:
             x["flags"].append("overlaps_same_signer")
     rows.sort(key=lambda x: x["line"])
+
+
+def read_ann2(ann_path):
+    with open(ann_path, newline="", encoding="utf-8-sig") as f:
+        return [dict(line=int(float(r[COLS["line"]])), start=float(r[COLS["start"]]),
+                     end=float(r[COLS["end"]]), signer=r[COLS["signer"]], text=r[COLS["text"]],
+                     sign_id=r.get(COLS["id"])) for r in csv.DictReader(f)]
+
+
+def check_video(vid, ann_path, tr_path, tool_path=None):
+    tr = load_transcript(tr_path)
+    rows = check_turns(vid, read_ann2(ann_path), tr)
     tool = load_tool(tool_path)
     for x in rows:                                  # tool's version of every turn, for comparison
         ti = tool_info(tool, x["line"])
