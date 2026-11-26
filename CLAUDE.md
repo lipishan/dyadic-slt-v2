@@ -37,8 +37,11 @@ The full plan is in `docs/PLAN.md`; this file is the short version plus the rule
 - **§2 Model:** frozen SHuBERT → small adapter → memory (one token per previous turn: visual vector
   + speaker + turn distance, last 16 turns). Two decoders behind one interface: T5-base (dev,
   ablations) and Qwen3-4B-Base + LoRA (main, soft prefix, Base checkpoint only).
-- **§3 Training stages with gates:** (1) OpenASL, no memory — true video must beat shuffled video;
-  (2) OpenASL pseudo-dialogue with self-history; (3) dyadic fine-tune with self + partner memory.
+- **§3 Training stages with gates:** (0) YouTube-ASL supervised pretraining, no memory (overlap with
+  dyadic/OpenASL valid+test already removed; captions filtered for junk and implausible speed);
+  (1) OpenASL, no memory — true video must beat shuffled video, in stages 0 and 1;
+  (2) pseudo-dialogue with self-history (OpenASL, optionally YouTube-ASL);
+  (3) dyadic fine-tune with self + partner memory.
 - **§4 Evaluation:** chrF, BLEU, a neural metric, per-word NLL; conversation-level paired
   bootstrap, 3 seeds, 95% CIs; model selection on valid only; shuffled-video check at test.
 - **§5 RQ2 analyses:** mention-number analysis (visual-only memory), articulation link, tags,
