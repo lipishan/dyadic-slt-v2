@@ -1,6 +1,8 @@
-# CLAUDE.md — Dyadic SLT (v2)
+# CLAUDE.md — ECHO (Dyadic SLT v2)
 
-Fresh codebase for **dyadic ASL → English translation with interaction memory**.
+**ECHO** (Earlier Conversation Helps Output): **dyadic ASL → English translation with interaction
+memory**. Dataset name: **DyadASL**. Paper working title: *ECHO: Interaction Memory for Dyadic
+Sign Language Translation*. (Replaces the old placeholder "DyMem" for the method.)
 The full plan is in `docs/PLAN.md`; this file is the short version plus the rules for working here.
 
 ## Working rules
